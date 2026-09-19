@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: corrida-de-leito
+    env: docker
+    plan: free
+    region: ohio
+    branch: main
+    autoDeploy: true
