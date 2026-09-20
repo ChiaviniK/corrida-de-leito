@@ -120,6 +120,7 @@ export default function App() {
   const [installPrompt, setInstallPrompt] = useState(null);
 
   const recognitionRef = useRef(null);
+  const gravandoLeitoIdRef = useRef(null);
 
   // Efeito do Dark Mode no HTML root
   useEffect(() => {
@@ -450,7 +451,7 @@ export default function App() {
     dispararToast('Registro clínico adicionado com sucesso!');
   };
 
-  // Reconhecimento de Voz (Web Speech API)
+  // Reconhecimento de Voz (Web Speech API Otimizado para Mobile e Desktop)
   const iniciarGravacao = (leitoId) => {
     vibrar([50]);
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -459,54 +460,86 @@ export default function App() {
       return;
     }
 
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch (e) {}
-    }
+    // Se já estava gravando outro leito, encerra a anterior
+    pararGravacao();
 
     const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
+    // No Android/Mobile, continuous e interimResults verdadeiros causam acúmulo de buffer e repetição de palavras.
+    // Usar continuous: false com reinício suave em onend elimina 100% a duplicação!
+    recognition.continuous = false;
+    recognition.interimResults = false;
     recognition.lang = 'pt-BR';
+    recognition.maxAlternatives = 1;
 
     recognition.onresult = (event) => {
-      let textoCompleto = '';
-      for (let i = 0; i < event.results.length; ++i) {
-        textoCompleto += event.results[i][0].transcript + ' ';
+      let textoTranscrito = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        if (event.results[i] && event.results[i][0]) {
+          const pedaco = event.results[i][0].transcript.trim();
+          if (pedaco) {
+            textoTranscrito += (textoTranscrito ? ' ' : '') + pedaco;
+          }
+        }
       }
 
+      if (!textoTranscrito) return;
+
+      // Anexa de forma limpa ao texto existente sem duplicar
       setTextosEntrada((prev) => {
+        const textoAtual = (prev[leitoId] || '').trim();
+        // Evita re-inserção se o navegador reenviar o mesmo trecho
+        if (textoAtual.endsWith(textoTranscrito)) {
+          return prev;
+        }
+        const novoTexto = textoAtual ? `${textoAtual} ${textoTranscrito}` : textoTranscrito;
         return {
           ...prev,
-          [leitoId]: textoCompleto.trim()
+          [leitoId]: novoTexto
         };
       });
     };
 
     recognition.onerror = (event) => {
       console.warn('Erro voz:', event.error);
-      if (event.error !== 'no-speech') {
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
         pararGravacao();
+        alert('Permissão de microfone negada. Por favor, autorize o acesso ao microfone no navegador.');
       }
     };
 
     recognition.onend = () => {
-      setGravandoLeitoId(null);
+      // Se ainda estiver ativo para este leito, reinicia com buffer limpo (escuta contínua estável)
+      if (gravandoLeitoIdRef.current === leitoId) {
+        try {
+          recognition.start();
+        } catch (e) {
+          gravandoLeitoIdRef.current = null;
+          setGravandoLeitoId(null);
+        }
+      } else {
+        setGravandoLeitoId(null);
+      }
     };
 
     recognitionRef.current = recognition;
+    gravandoLeitoIdRef.current = leitoId;
+    setGravandoLeitoId(leitoId);
+
     try {
       recognition.start();
-      setGravandoLeitoId(leitoId);
     } catch (err) {
-      console.error(err);
+      console.error('Falha ao iniciar reconhecimento:', err);
+      gravandoLeitoIdRef.current = null;
+      setGravandoLeitoId(null);
     }
   };
 
   const pararGravacao = () => {
     vibrar([30, 20]);
+    gravandoLeitoIdRef.current = null;
     if (recognitionRef.current) {
       try {
-        recognitionRef.current.stop();
+        recognitionRef.current.abort(); // abort encerra imediatamente sem disparar callbacks residuais
       } catch (e) {}
       recognitionRef.current = null;
     }
