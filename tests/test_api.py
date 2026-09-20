@@ -140,6 +140,58 @@ class TestCorridaLeitoAPI(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["short_name"], "Corrida de Leito")
         self.assertEqual(data["display"], "standalone")
 
+    async def test_09_auth_login_fail(self):
+        # Tentativa com senha errada
+        res = await self.client.post("/api/auth/login", json={
+            "username": "augusto",
+            "password": "SenhaErrada999"
+        })
+        self.assertEqual(res.status_code, 401)
+        self.assertIn("Credenciais inválidas", res.json()["detail"])
+
+        # Tentativa com usuário inexistente
+        res_usr = await self.client.post("/api/auth/login", json={
+            "username": "usuario_nao_existente",
+            "password": "QualquerCoisa123"
+        })
+        self.assertEqual(res_usr.status_code, 401)
+        self.assertIn("Credenciais inválidas", res_usr.json()["detail"])
+
+    async def test_10_auth_login_success(self):
+        res = await self.client.post("/api/auth/login", json={
+            "username": "augusto",
+            "password": "Agusto123"
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("access_token", data)
+        self.assertEqual(data["usuario"]["username"], "augusto")
+        self.assertEqual(data["usuario"]["nome"], "Augusto")
+        self.assertEqual(data["usuario"]["role"], "ADMIN")
+
+    async def test_11_auth_me_endpoint(self):
+        # 1. Login para obter token
+        res_login = await self.client.post("/api/auth/login", json={
+            "username": "augusto",
+            "password": "Agusto123"
+        })
+        token = res_login.json()["access_token"]
+
+        # 2. Consultar perfil com token válido
+        res_me = await self.client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        self.assertEqual(res_me.status_code, 200)
+        self.assertEqual(res_me.json()["username"], "augusto")
+
+        # 3. Consultar com token adulterado
+        res_inv = await self.client.get(
+            "/api/auth/me",
+            headers={"Authorization": "Bearer token_falso.invalido"}
+        )
+        self.assertEqual(res_inv.status_code, 401)
+
 
 if __name__ == "__main__":
     unittest.main()

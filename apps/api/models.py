@@ -145,3 +145,16 @@ class SimpleRegistro(Base):
     leito_rel = relationship("SimpleLeito", back_populates="registros")
 
 
+class Usuario(Base):
+    __tablename__ = "usuarios"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    username = Column(String(50), unique=True, nullable=False, index=True)
+    nome = Column(String(100), nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    role = Column(String(20), default="ADMIN")
+    ativo = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+

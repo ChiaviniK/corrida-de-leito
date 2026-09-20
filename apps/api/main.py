@@ -6,7 +6,8 @@ from typing import List
 from datetime import datetime, timedelta
 
 from .database import engine, Base, get_db
-from .models import Leito, Paciente, RegistroCorridaLeito, PassagemPlantao, SimpleLeito, SimpleRegistro
+from .models import Leito, Paciente, RegistroCorridaLeito, PassagemPlantao, SimpleLeito, SimpleRegistro, Usuario
+from .auth import hash_password, verify_password, create_access_token, verify_access_token
 from pydantic import BaseModel
 from .schemas import (
     LeitoResponse, LeitoCreate, PacienteResponse, PacienteCreate
@@ -14,6 +15,7 @@ from .schemas import (
 from .routes_corrida import router as corrida_router
 from .routes_plantao import router as plantao_router
 from .routes_export import router as export_router
+from fastapi import Header
 
 # Criação das tabelas no banco de dados
 Base.metadata.create_all(bind=engine)
@@ -42,6 +44,29 @@ def _ensure_sqlite_columns():
 
 _ensure_sqlite_columns()
 
+def _ensure_default_user():
+    try:
+        from .database import SessionLocal
+        db = SessionLocal()
+        try:
+            admin = db.query(Usuario).filter(Usuario.username == "augusto").first()
+            if not admin:
+                novo = Usuario(
+                    username="augusto",
+                    nome="Augusto",
+                    password_hash=hash_password("Agusto123"),
+                    role="ADMIN",
+                    ativo=True
+                )
+                db.add(novo)
+                db.commit()
+        finally:
+            db.close()
+    except Exception:
+        pass
+
+_ensure_default_user()
+
 app = FastAPI(
     title="API de Corrida de Leito & Passagem de Plantão",
     description="Sistema para registro clínico multiprofissional com transcrição por voz e relatórios de leitos hospitalares.",
@@ -61,6 +86,74 @@ app.add_middleware(
 app.include_router(corrida_router)
 app.include_router(plantao_router)
 app.include_router(export_router)
+
+# =========================================================================
+# ENDPOINTS DE AUTENTICAÇÃO E CREDENCIAIS
+# =========================================================================
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/auth/login", tags=["Autenticação"])
+def login(data: LoginRequest, db: Session = Depends(get_db)):
+    u_limpo = data.username.strip().lower()
+    usuario = db.query(Usuario).filter(Usuario.username == u_limpo).first()
+
+    # Mensagem genérica para mitigar enumeração de contas
+    if not usuario or not usuario.ativo or not verify_password(data.password, usuario.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciais inválidas. Verifique o usuário e a senha."
+        )
+
+    token = create_access_token({
+        "sub": usuario.id,
+        "username": usuario.username,
+        "nome": usuario.nome,
+        "role": usuario.role
+    })
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "usuario": {
+            "id": usuario.id,
+            "username": usuario.username,
+            "nome": usuario.nome,
+            "role": usuario.role
+        }
+    }
+
+
+@app.get("/api/auth/me", tags=["Autenticação"])
+def obter_usuario_logado(authorization: str = Header(None), db: Session = Depends(get_db)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autenticado.")
+
+    token = authorization.split(" ")[1]
+    payload = verify_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sessão expirada ou token inválido.")
+
+    usuario = db.query(Usuario).filter(Usuario.id == payload.get("sub")).first()
+    if not usuario or not usuario.ativo:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuário inativo ou não encontrado.")
+
+    return {
+        "id": usuario.id,
+        "username": usuario.username,
+        "nome": usuario.nome,
+        "role": usuario.role
+    }
+
+
+@app.post("/api/auth/logout", tags=["Autenticação"])
+def logout():
+    return {"mensagem": "Sessão finalizada com sucesso."}
+
+
 # =========================================================================
 # ENDPOINTS SIMPLIFICADOS: ADICIONAR LEITO, PACIENTE E REGISTROS (VOZ/TEXTO)
 # =========================================================================
